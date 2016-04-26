@@ -24,15 +24,18 @@ $(BUILD_DIR)/src/$(PROJECT):
 	@ln -s $(MAKEFILE_DIR) $@
 
 $(BUILD_BINARY): $(BUILD_DIR)/src/$(PROJECT) $(SOURCES)
-	@$(GO_ENV) go install $(PROJECT)
-	@strip $(BUILD_BINARY)
+	@$(GO_ENV) go install $(PROJECT) && \
+	strip $(BUILD_BINARY)
+
+test: $(BUILD_DIR)/src/$(PROJECT) $(SOURCES)
+	@$(GO_ENV) go test
 
 install:all
-	@install -d $(DESTDIR)$(PREFIX)
-	@install -v -m 755 $(BUILD_BINARY) $(DESTDIR)$(PREFIX)/$(BINARY)
+	@install -d $(DESTDIR)/bin/$(PREFIX)
+	@install -v -m 755 $(BUILD_BINARY) $(DESTDIR)$(PREFIX)/bin/$(BINARY)
 
 uninstall:
-	@rm -v -f $(DESTDIR)$(PREFIX)/$(BINARY)
+	@rm -v -f $(DESTDIR)$(PREFIX)/bin/$(BINARY)
 
 clean:
 	@rm -rf $(MAKEFILE_DIR)/.build

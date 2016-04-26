@@ -7,302 +7,137 @@ package main
 
 import (
 	"bufio"
-	"crypto/md5"
-	"database/sql"
-	"fmt"
-	_ "github.com/mattn/go-sqlite3"
 	"io"
 	"log"
-	"os"
 	"os/exec"
+	"path"
+	"sort"
 	"strings"
 	"sync"
 )
 
-const (
-	Arch_noarch = 1
-	Arch_i586   = 2
-	Arch_x86_64 = 4
-
-	Arch_32  = Arch_noarch | Arch_i586
-	Arch_64  = Arch_noarch | Arch_x86_64
-	Arch_All = Arch_noarch | Arch_i586 | Arch_x86_64
-)
-
-const (
-	DB_DDL = `
-	CREATE TABLE IF NOT EXISTS sys (
-		id integer UNIQUE,
-		dbid string
-	);
-
-	INSERT OR IGNORE INTO sys (id) VALUES (0);
-
-	CREATE TABLE IF NOT EXISTS repos (
-		id integer not null primary key,
-		name string UNIQUE,
-		file string,
-		md5 string
-	);
-
-	CREATE TABLE  IF NOT EXISTS pkgs (
-		id integer not null primary key,
- 				
-		filename    string  NOT NULL,
-		name        string  NOT NULL,
-		summary	    string  DEFAULT "",
-		size        integer DEFAULT 0,
-		disttag     string  DEFAULT "",
-		sourcerpm   string  DEFAULT "",
-		url         string  DEFAULT "",
-		license     string  DEFAULT "",
-		description string  DEFAULT "",
-		arch        string  DEFAULT "",
-		distepoch   string  DEFAULT "",
-		version     string  DEFAULT "",
-		grp         string  DEFAULT "",
-		last		boolean DEFAULT false,
-		repoid integer NOT NULL, 
-		FOREIGN KEY(repoid)	REFERENCES repos(id) ON DELETE CASCADE
-				
-	);`
-)
-
 type Cache struct {
-	dbFile string
-	rpmDB  map[string]string
+	packages Packages
 }
 
-func NewCache(cacheFile string) *Cache {
+func NewCache() *Cache {
+	c := &Cache{}
 
-	c := &Cache{
-		dbFile: cacheFile,
-		rpmDB:  map[string]string{},
-	}
+	info := map[string]InfoRecord{}
+	installed := map[string]string{}
 
-	// Fill info about installed packages
-	var rpmWg sync.WaitGroup
-	rpmWg.Add(1)
-	go func() {
-		defer rpmWg.Done()
-		c.fillRpmDB()
-	}()
+	var wg sync.WaitGroup
 
-	db := c.openDB()
-
-	// Remove outdated DB .............
-	dbID := fmt.Sprintf("%x", md5.Sum([]byte(DB_DDL)))
-	var oldID string
-	_ = db.QueryRow("SELECT dbid FROM sys").Scan(&oldID)
-	if oldID != dbID {
-		db.Close()
-		os.Remove(cacheFile)
-		db = c.openDB()
-	}
-
-	// Create DB ......................
-	if _, err := db.Exec(DB_DDL); err != nil {
-		log.Fatal("Can't create DB:", err, "\n", DB_DDL)
-	}
-
-	if _, err := db.Exec("UPDATE sys SET dbID = ?;", dbID); err != nil {
-		log.Fatal("Can't create DB:", err)
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		log.Fatal("Can't update cache:", err)
-	}
-	defer tx.Rollback()
-
-	c.update(tx)
-	tx.Commit()
-
-	rpmWg.Wait()
-	return c
-}
-
-func (c Cache) openDB() *sql.DB {
-	db, err := sql.Open("sqlite3", c.dbFile)
-	if err != nil {
-		log.Fatal("Can't open cache db:", err)
-	}
-
-	ddl := `PRAGMA foreign_keys = ON;
-	 		PRAGMA journal_mode = MEMORY;
-	 		PRAGMA temp_store = MEMORY;
-		`
-	// 	PRAGMA automatic_index = ON;
-	//        PRAGMA cache_size = 32768;
-	//        PRAGMA cache_spill = OFF;
-
-	//        PRAGMA journal_size_limit = 67110000;
-	//        PRAGMA locking_mode = NORMAL;
-	//        PRAGMA page_size = 4096;
-	//        PRAGMA recursive_triggers = ON;
-	//        PRAGMA secure_delete = ON;
-	//        PRAGMA synchronous = NORMAL;
-	//        PRAGMA temp_store = MEMORY;
-	//
-	//        PRAGMA wal_autocheckpoint = 16384;
-	// `
-	if _, err := db.Exec(ddl); err != nil {
-		log.Fatal(err)
-	}
-
-	return db
-}
-
-func (c *Cache) update(tx *sql.Tx) {
-
-	reps, err := GetRepositories()
+	// Get info about repositories
+	repos, err := GetRepositories()
 	if err != nil {
 		log.Fatal("Can't read urpi.cfg file: ", err)
 	}
 
-	// Remove outdated repos ..........
-	outdated := map[string]bool{}
-	rows, err := tx.Query("SELECT name FROM repos")
-	if err != nil {
-		log.Fatal("Can't update cache:", err)
-	}
-	defer rows.Close()
+	wg.Add(1)
 
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			log.Fatal("Can't update cache:", err)
-		}
+	go func() {
+		defer wg.Done()
+		installed = fillInstalledInfo()
+	}()
 
-		outdated[name] = true
-	}
+	syntesisChan := make(chan Package, 9999)
+	var synthWg sync.WaitGroup
 
-	for _, rep := range reps {
-		outdated[rep.Name] = rep.Ignore
-	}
+	infoChan := make(chan InfoRecord, 9999)
+	var infoWg sync.WaitGroup
 
-	for n, out := range outdated {
-		if out {
-			_, err = tx.Exec(`delete from repos where name = ?`, n)
-		}
-	}
+	for _, repo := range repos {
 
-	// Add packages ...................
-	changedCnt := 0
-	var wg sync.WaitGroup
-	for _, rep := range reps {
-		if rep.Ignore {
+		if repo.Ignore {
 			continue
 		}
 
-		var repoID int64
-		var md5 string
-		err = tx.QueryRow("SELECT id, md5 FROM repos WHERE name = ?", rep.Name).Scan(&repoID, &md5)
-		if err != nil && err != sql.ErrNoRows {
-			log.Fatal("DB error:", err)
-		}
-
-		if md5 == "" || md5 != rep.Md5 {
-			if changedCnt == 0 {
-				fmt.Printf("Updating cache ... ")
-				changedCnt++
+		// **************************************
+		// Parse synthesis.hdlist.cz file
+		synthWg.Add(1)
+		go func(r Repository) {
+			defer synthWg.Done()
+			err = ReadSynthesisFile(r, r.Dir+"/synthesis.hdlist.cz", syntesisChan)
+			if err != nil {
+				log.Fatal("Can't read synthesis file ", r.Dir+"/synthesis.hdlist.cz", ": ", err)
 			}
+		}(repo)
 
-			wg.Add(1)
-			go func(r Repository, rID int64) {
-				defer wg.Done()
-				updatePkgs(tx, r, rID)
-			}(rep, repoID)
-		}
+		// **************************************
+		// Parse info.xml.lzma file
+		infoWg.Add(1)
+		go func(r Repository) {
+			defer infoWg.Done()
+			err = ReadInfoFile(r.Dir+"/info.xml.lzma", infoChan)
+			if err != nil {
+				log.Fatal("Can't read info file ", r.Dir+"/info.xml.lzma", ": ", err)
+			}
+		}(repo)
 	}
+
+	go func() {
+		synthWg.Wait()
+		close(syntesisChan)
+	}()
+
+	go func() {
+		infoWg.Wait()
+		close(infoChan)
+	}()
+
+	// **************************************
+	// Save data from synthesis.hdlist.cz file
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for pkg := range syntesisChan {
+			c.packages = append(c.packages, pkg)
+
+		}
+	}()
+
+	// **************************************
+	// Save data from info.xml.lzma file
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range infoChan {
+			info[i.Filename] = i
+		}
+	}()
 
 	wg.Wait()
 
-	if changedCnt > 0 {
-		fmt.Printf(" Done\n")
+	sort.Sort(c.packages)
+	n := 0
+	for i, pkg := range c.packages {
+		if n < len(pkg.Name) {
+			n = len(pkg.Name)
+		}
+		inf, ok := info[pkg.FileName]
+		if ok {
+			pkg.Sourcerpm = inf.Sourcerpm
+			pkg.URL = inf.URL
+			pkg.License = inf.License
+			pkg.Description = inf.Description
+
+			c.packages[i] = pkg
+		}
+
+		ver, ok := installed[pkg.Name]
+		if ok {
+			pkg.InstalledVer = ver
+			c.packages[i] = pkg
+		}
 	}
 
-	if changedCnt > 0 {
-		// Set last mark ..................
-		_, err = tx.Exec(`UPDATE pkgs SET last = 0;
-			UPDATE pkgs SET last = 1 
-			WHERE id in (
-				SELECT p1.id FROM pkgs p1 
-				WHERE p1.version = (
-					SELECT max(p2.version) FROM pkgs p2 
-					WHERE p2.Name = p1.name AND 
-						  p2.arch = p1.arch
-					)
-			);`)
-	}
+	return c
 }
 
-func updatePkgs(tx *sql.Tx, rep Repository, repoID int64) {
-	if repoID == 0 {
-		res, err := tx.Exec(`INSERT INTO repos (name, md5) VALUES(?,?)`, rep.Name, rep.Md5)
-		if err != nil {
-			log.Fatal("DB error:", err)
-		}
-
-		if repoID, err = res.LastInsertId(); err != nil {
-			log.Fatal("DB error:", err)
-		}
-
-	} else {
-		_, err := tx.Exec(`delete from pkgs where repoid = ?`, repoID)
-		if err != nil {
-			log.Fatal("DB error:", err)
-		}
-	}
-
-	stmt, err := tx.Prepare(`
-	 	INSERT INTO pkgs
-	 		(repoid,
-	 		filename,
-	 		name,
-	 		disttag,
-	 		sourcerpm,
-	 		url,
-	 		license,
-	 		description,
-	 		arch,
-	 		distepoch,
-	 		version,
-	 		summary,
-	 		size,
-	 		grp)
-	 	VALUES
-	 		(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	 	`)
-
-	for pkg := range rep.ReadPackages() {
-		_, err = stmt.Exec(
-			repoID,
-			pkg.Filename,
-			pkg.Name,
-			pkg.Disttag,
-			pkg.Sourcerpm,
-			pkg.URL,
-			pkg.License,
-			pkg.Description,
-			pkg.Arch,
-			pkg.Distepoch,
-			pkg.Version,
-			pkg.Summary,
-			pkg.Size,
-			pkg.Group)
-
-		if err != nil {
-			log.Fatal("DB error:", err)
-		}
-	}
-
-	if rep.Error != nil {
-		log.Fatal("Can't read package info:", rep.Error)
-	}
-}
-
-func (c *Cache) fillRpmDB() {
+func fillInstalledInfo() map[string]string {
+	res := map[string]string{}
 	cmd := exec.Command("rpm", "-q", "-a", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -321,121 +156,106 @@ func (c *Cache) fillRpmDB() {
 		}
 
 		if err != nil {
-			log.Fatal("can't read synthesis file:", err)
+			log.Fatal("can't get installed versions:", err)
 		}
 
 		line = strings.Trim(line, "\n\r")
 		items := strings.Split(line, "\t")
-		c.rpmDB[items[0]] = items[1]
+		res[items[0]] = items[1]
 	}
+	return res
 }
 
-func (c Cache) search(query string, args ...interface{}) <-chan Package {
+type packagesVerSorted []Package
+
+func (p packagesVerSorted) Len() int {
+	return len(p)
+}
+
+func (p packagesVerSorted) Swap(i, j int) {
+	p[i], p[j] = p[j], p[i]
+}
+
+func (p packagesVerSorted) Less(i, j int) bool {
+	return CompareVer(p[i].Version, p[j].Version) > 0
+}
+
+func compareName(names []string, pkg Package) bool {
+	for _, word := range names {
+		if word == "" {
+			continue
+		}
+
+		if word == "*" {
+			return true
+		}
+
+		word = "*" + strings.ToLower(word) + "*"
+		ok, _ := path.Match(word, strings.ToLower(pkg.Name))
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+func compareArch(arch []string, pkg Package) bool {
+	for _, a := range arch {
+		if strings.ToLower(pkg.Arch) == strings.ToLower(a) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (c Cache) SearchByName(names []string, arch []string, onlyLast bool) <-chan Package {
 	out := make(chan Package)
 
-	query = strings.Replace(query,
-		"PKG_FIELDS",
-		`id,
-			filename,
- 			name,
- 			disttag,
- 			sourcerpm,
- 			URL,
-			license,
-			description,
-			arch,
-			distepoch,
-			version,
-			summary,
-			size,
-			grp`,
-		-1)
+	prevName := ""
+	prog := packagesVerSorted{}
 
 	go func() {
-		db := c.openDB()
-		defer db.Close()
+		defer close(out)
 
-		rows, err := db.Query(query, args...)
-		if err != nil {
-			log.Fatal("DB error:", err, "\n", query)
-		}
-		defer rows.Close()
-
-		var pkg Package
-		for rows.Next() {
-			err := rows.Scan(
-				&pkg.CacheID,
-				&pkg.Filename,
-				&pkg.Name,
-				&pkg.Disttag,
-				&pkg.Sourcerpm,
-				&pkg.URL,
-				&pkg.License,
-				&pkg.Description,
-				&pkg.Arch,
-				&pkg.Distepoch,
-				&pkg.Version,
-				&pkg.Summary,
-				&pkg.Size,
-				&pkg.Group,
-			)
-
-			if err != nil {
-				log.Fatal("DB error:", err, "\n", query)
+		for _, pkg := range c.packages {
+			if !compareArch(arch, pkg) {
+				continue
 			}
-			pkg.InstalledVer = c.rpmDB[pkg.Name]
-			out <- pkg
+
+			if !compareName(names, pkg) {
+				continue
+			}
+
+			if prevName != pkg.Name {
+				prog.processOneProgPkgs(names, arch, onlyLast, out)
+
+				prevName = pkg.Name
+				prog = packagesVerSorted{}
+			}
+
+			prog = append(prog, pkg)
 		}
 
-		close(out)
-
+		prog.processOneProgPkgs(names, arch, onlyLast, out)
 	}()
+
 	return out
 }
 
-func (c Cache) SearchByName(names []string, arch int, onlyLast bool) <-chan Package {
-	var args []interface{}
-	query := "SELECT PKG_FIELDS FROM pkgs WHERE "
-
-	// Name ...........................
-	query += "("
-	for i, name := range names {
-		if i == 0 {
-			query += "(name like ? ) "
-		} else {
-			query += "OR (name like ? ) "
-		}
-
-		name = strings.Replace(name, "*", "%", -1)
-		name = strings.Replace(name, "?", "_", -1)
-		args = append(args, name)
-	}
-	query += ") "
-
-	// Arch ...........................
-	query += "AND arch IN ("
-	comma := ""
-	if arch&Arch_noarch > 0 {
-		query += comma + "?"
-		comma = ","
-		args = append(args, "noarch")
+func (pkgs packagesVerSorted) processOneProgPkgs(names []string, arch []string, onlyLast bool, out chan<- Package) {
+	if len(pkgs) == 0 {
+		return
 	}
 
-	if arch&Arch_i586 > 0 {
-		query += comma + "?"
-		args = append(args, "i586")
-	}
-
-	if arch&Arch_x86_64 > 0 {
-		query += comma + "?"
-		args = append(args, "x86_64")
-	}
-	query += ") "
+	sort.Sort(pkgs)
 
 	if onlyLast {
-		query += " AND last = 1 "
+		out <- pkgs[0]
+		return
 	}
 
-	query += "ORDER BY name ASC, version DESC, arch ASC"
-	return c.search(query, args...)
+	for _, p := range pkgs {
+		out <- p
+	}
 }

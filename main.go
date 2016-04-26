@@ -17,12 +17,8 @@ import (
 )
 
 const (
-	version = "0.1.0"
+	version = "0.1.99"
 	author  = "Alexander Sokolov <sokoloff.A@gmail.com>"
-)
-
-var (
-	cacheFile = os.Getenv("HOME") + "/.cache/zrpm.db"
 )
 
 var (
@@ -48,7 +44,7 @@ func ColorPrintf(format string, a ...interface{}) {
 	fmt.Printf(format, a...)
 }
 
-func machineArch() int {
+func machineArch() string {
 	utsname := syscall.Utsname{}
 	err := syscall.Uname(&utsname)
 	if err != nil {
@@ -61,45 +57,18 @@ func machineArch() int {
 			s += string(rune(v))
 		}
 	}
-	return strToArch(s)
+	return s
 }
 
-func strToArch(s string) int {
-	s = strings.ToLower(s)
-
-	if s == "all" {
-		return Arch_All
+func getArch(c *cli.Context) []string {
+	if c.String("arch") != "" {
+		return strings.Split(c.String("arch"), ",")
 	}
 
-	if s == "noarch" {
-		return Arch_noarch
+	return []string{
+		"noarch",
+		machineArch(),
 	}
-
-	if s == "i586" || s == "i686" {
-		return Arch_i586
-	}
-
-	if s == "x86_64" {
-		return Arch_x86_64
-	}
-
-	log.Fatal("Unknown architecture ", s)
-	return 0
-}
-
-func getArch(c *cli.Context) int {
-	var arch int
-	for _, s := range strings.Split(c.String("arch"), ",") {
-		if s != "" {
-			arch = arch | strToArch(s)
-		}
-	}
-
-	if arch != 0 {
-		return arch
-	}
-
-	return Arch_noarch | machineArch()
 }
 
 func execute(args ...string) {
@@ -157,14 +126,9 @@ func mainSearch(c *cli.Context) {
 		return
 	}
 
-	var args []string
-	for _, a := range c.Args() {
-		args = append(args, "%"+a+"%")
-	}
-
 	// Search .........................
-	cache := NewCache(cacheFile)
-	out := cache.SearchByName(args, getArch(c), !c.Bool("showduplicates"))
+	cache := NewCache()
+	out := cache.SearchByName(c.Args(), getArch(c), !c.Bool("showduplicates"))
 
 	// Out ............................
 	for pkg := range out {
@@ -180,14 +144,16 @@ func mainSearch(c *cli.Context) {
 			state = "U"
 		}
 
-		ColorPrintf("%s%s  %-40s{NORM} %-15s %s\n",
+		ColorPrintf("%s%s  %-40s{NORM} %-15s %-8s %s %s\n",
 			color,
 			state,
 			pkg.Name,
 			pkg.Version,
-			pkg.Summary)
-	}
+			pkg.Arch,
+			pkg.Summary,
+			pkg.Repository)
 
+	}
 }
 
 func mainShow(c *cli.Context) {
@@ -199,7 +165,7 @@ func mainShow(c *cli.Context) {
 	}
 
 	// Search .........................
-	cache := NewCache(cacheFile)
+	cache := NewCache()
 	out := cache.SearchByName(c.Args(), getArch(c), !c.Bool("showduplicates"))
 
 	// Out ............................
@@ -219,9 +185,10 @@ func mainShow(c *cli.Context) {
 		}
 
 		ColorPrintf("Group       : %s\n", pkg.Group)
-		ColorPrintf("Size        : %v\n", pkg.Size)
+		ColorPrintf("Size        : RPM: %v     Files: %v\n", pkg.RPMSize, pkg.Size)
 		ColorPrintf("Source RPM  : %s\n", pkg.Sourcerpm)
 		ColorPrintf("URL         : %s\n", pkg.URL)
+		ColorPrintf("Repository  : %s\n", pkg.Repository)
 		s := strings.TrimLeft(pkg.Description, "\n")
 		ColorPrintf(s)
 		fmt.Println("")
@@ -270,6 +237,7 @@ func mainFile(c *cli.Context) {
 }
 
 func main() {
+
 	app := cli.NewApp()
 	app.Name = "zrpm"
 	app.Usage = "zrpm is a text-based interface to the RPM package system."

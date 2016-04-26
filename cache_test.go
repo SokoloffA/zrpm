@@ -8,11 +8,11 @@ package main
 import (
 	"code.google.com/p/lzma"
 	"compress/gzip"
-	"database/sql"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -20,7 +20,7 @@ var (
 	testDir string
 
 	saxpath_103 = Package{
-		Filename:  "saxpath-1.0-3-rosa2014.1.noarch",
+		FileName:  "saxpath-1.0-3-rosa2014.1.noarch",
 		Disttag:   "rosa",
 		Sourcerpm: "saxpath-1.0-3.src.rpm",
 		URL:       "http://sourceforge.net/projects/saxpath/",
@@ -31,7 +31,7 @@ var (
 	}
 
 	flacon_x64_120 = Package{
-		Filename:  "flacon-1.2.0-1-rosa2014.1.x86_64",
+		FileName:  "flacon-1.2.0-1-rosa2014.1.x86_64",
 		Disttag:   "rosa",
 		Sourcerpm: "flacon-1.2.0-1.src.rpm",
 		URL:       "http://sourceforge.net/projects/saxpath/",
@@ -44,7 +44,7 @@ var (
 	}
 
 	flacon_x32_120 = Package{
-		Filename:  "flacon-1.2.0-1-rosa2014.1.i586",
+		FileName:  "flacon-1.2.0-1-rosa2014.1.i586",
 		Disttag:   "rosa",
 		Sourcerpm: "flacon-1.2.0-1.src.rpm",
 		URL:       "http://sourceforge.net/projects/saxpath/",
@@ -58,7 +58,7 @@ var (
 
 	boomaga_x64_060 = Package{
 
-		Filename:    "boomaga-0.6.0-1-rosa2014.1.x86_64",
+		FileName:    "boomaga-0.6.0-1-rosa2014.1.x86_64",
 		Disttag:     "rosa",
 		Sourcerpm:   "boomaga-0.6.0-1.src.rpm",
 		URL:         "http://sourceforge.net/projects/saxpath/",
@@ -67,7 +67,7 @@ var (
 	}
 
 	boomaga_x64_071 = Package{
-		Filename:    "boomaga-0.7.1-1-rosa2014.1.x86_64",
+		FileName:    "boomaga-0.7.1-1-rosa2014.1.x86_64",
 		Disttag:     "rosa",
 		Sourcerpm:   "boomaga-0.7.1-1.src.rpm",
 		URL:         "http://sourceforge.net/projects/saxpath/",
@@ -77,7 +77,7 @@ var (
 
 	boomaga_x32_060 = Package{
 
-		Filename:    "boomaga-0.6.0-1-rosa2014.1.i586",
+		FileName:    "boomaga-0.6.0-1-rosa2014.1.i586",
 		Disttag:     "rosa",
 		Sourcerpm:   "boomaga-0.6.0-1.src.rpm",
 		URL:         "http://sourceforge.net/projects/saxpath/",
@@ -86,7 +86,7 @@ var (
 	}
 
 	boomaga_x32_071 = Package{
-		Filename:    "boomaga-0.7.1-1-rosa2014.1.i586",
+		FileName:    "boomaga-0.7.1-1-rosa2014.1.i586",
 		Disttag:     "rosa",
 		Sourcerpm:   "boomaga-0.7.1-1.src.rpm",
 		URL:         "http://sourceforge.net/projects/saxpath/",
@@ -168,7 +168,7 @@ func createPkgFiles(t *testing.T, tmpDir string, repoName string, pkgs []Package
 
 	for _, p := range pkgs {
 		lz.Write([]byte("<info "))
-		lz.Write([]byte(fmt.Sprintf("fn='%s' ", p.Filename)))
+		lz.Write([]byte(fmt.Sprintf("fn='%s' ", p.FileName)))
 		lz.Write([]byte(fmt.Sprintf("disttag='%s' ", p.Disttag)))
 		lz.Write([]byte(fmt.Sprintf("distepoch='%s' ", p.Distepoch)))
 		lz.Write([]byte(fmt.Sprintf("sourcerpm='%s' ", p.Sourcerpm)))
@@ -193,189 +193,136 @@ func createPkgFiles(t *testing.T, tmpDir string, repoName string, pkgs []Package
 	for _, p := range pkgs {
 		gz.Write([]byte(fmt.Sprintf("@summary@%s\n", p.Summary)))
 		gz.Write([]byte(fmt.Sprintf("@filesize@%d\n", p.Size)))
-		gz.Write([]byte(fmt.Sprintf("@info@%s@0@12345@%s@2014.1\n", p.Filename, p.Group)))
+		gz.Write([]byte(fmt.Sprintf("@info@%s@0@12345@%s@rosa@2014.1\n", p.FileName, p.Group)))
 	}
 }
 
-func tableRowCount(t *testing.T, dbFile string, table string) int {
-	db, err := sql.Open("sqlite3", dbFile)
-	if err != nil {
-		t.Error("Can't open cache db: ", err)
-		t.Fail()
+func TestCompareName(t *testing.T) {
+	cases := []struct {
+		words  []string
+		pkg    Package
+		expect bool
+	}{
+		{
+			[]string{""},
+			Package{Name: "boomaga"},
+			false,
+		},
+
+		{
+			[]string{"*"},
+			Package{Name: "boomaga"},
+			true,
+		},
+
+		{
+			[]string{"boo"},
+			Package{Name: "boomaga"},
+			true,
+		},
+
+		{
+			[]string{"boomaga"},
+			Package{Name: "boomaga"},
+			true,
+		},
+		{
+			[]string{"oo"},
+			Package{Name: "boomaga"},
+			true,
+		},
+
+		{
+			[]string{"o"},
+			Package{Name: "boomaga"},
+			true,
+		},
+		{
+			[]string{"aga"},
+			Package{Name: "boomaga"},
+			true,
+		},
+
+		{
+			[]string{"BooMaGa"},
+			Package{Name: "boomaga"},
+			true,
+		},
+		{
+			[]string{"boomagaa"},
+			Package{Name: "boomaga"},
+			false,
+		},
+		{
+			[]string{"bomaga"},
+			Package{Name: "boomaga"},
+			false,
+		},
 	}
 
-	var res int
-	ddl := fmt.Sprintf("SELECT COUNT(id) FROM %s;", table)
-
-	if err := db.QueryRow(ddl).Scan(&res); err != nil {
-		t.Errorf("DB error: %#v", err)
-		t.Fail()
+	for _, c := range cases {
+		res := compareName(c.words, c.pkg)
+		if res != c.expect {
+			t.Errorf(`Result mismatch
+------------------------
+words: %#v
+package name: %v
+expected: %#v
+got:      %#v`,
+				c.words,
+				c.pkg.Name,
+				c.expect,
+				res)
+		}
 	}
-
-	return res
-}
-
-func TestCacheCreate(t *testing.T) {
-	dir, err := createDirs()
-	if err != nil {
-		t.Error("Can't ceate tmp dir:", err)
-	}
-	defer os.RemoveAll(dir)
-
-	dbFile := dir + "/test.db"
-	EtcDir = dir + "/etc"
-	VarDir = dir + "/var"
-
-	var expect int
-	var res int
-
-	// ******************************************
-	createUrpmiConfig(t, dir, []Repository{
-		{Name: "Test", URL: "http://test.com/test"},
-		{Name: "Test\\ 2", URL: "http://test.com/test2"},
-	})
-
-	createPkgFiles(t, dir, "Test", []Package{
-		saxpath_103,
-		flacon_x64_120,
-		boomaga_x64_060,
-	})
-
-	createPkgFiles(t, dir, "Test 2", []Package{
-		boomaga_x64_071,
-	})
-
-	_ = NewCache(dbFile)
-
-	expect = 2
-	res = tableRowCount(t, dbFile, "repos")
-	if expect != res {
-		t.Errorf("Result mismatch: expected: %v, real: %v ", expect, res)
-	}
-
-	expect = 4
-	res = tableRowCount(t, dbFile, "pkgs")
-	if expect != res {
-		t.Errorf("Result mismatch: expected: %v, real: %v ", expect, res)
-	}
-
-	// ******************************************
-	createUrpmiConfig(t, dir, []Repository{
-		{Name: "Test", URL: "http://test.com/test", Ignore: true},
-		{Name: "Test\\ 2", URL: "http://test.com/test2"},
-	})
-
-	_ = NewCache(dbFile)
-
-	expect = 1
-	res = tableRowCount(t, dbFile, "repos")
-	if expect != res {
-		t.Errorf("Result mismatch: expected: %v, real: %v ", expect, res)
-	}
-
-	expect = 1
-	res = tableRowCount(t, dbFile, "pkgs")
-	if expect != res {
-		t.Errorf("Result mismatch: expected: %v, real: %v ", expect, res)
-	}
-
-	// ******************************************
-	createUrpmiConfig(t, dir, []Repository{
-		{Name: "Test", URL: "http://test.com/test"},
-		{Name: "Test\\ 2", URL: "http://test.com/test2"},
-	})
-
-	createPkgFiles(t, dir, "Test", []Package{
-		saxpath_103,
-		flacon_x64_120,
-		boomaga_x64_060,
-	})
-
-	createPkgFiles(t, dir, "Test 2", []Package{
-		boomaga_x64_071,
-	})
-
-	_ = NewCache(dbFile)
-
-	expect = 2
-	res = tableRowCount(t, dbFile, "repos")
-	if expect != res {
-		t.Errorf("Result mismatch: expected: %v, real: %v ", expect, res)
-	}
-
-	expect = 4
-	res = tableRowCount(t, dbFile, "pkgs")
-	if expect != res {
-		t.Errorf("Result mismatch: expected: %v, real: %v ", expect, res)
-	}
-
-	// ******************************************
-	createUrpmiConfig(t, dir, []Repository{
-		{Name: "Test", URL: "http://test.com/test", Ignore: false},
-	})
-
-	_ = NewCache(dbFile)
-
-	expect = 1
-	res = tableRowCount(t, dbFile, "repos")
-	if expect != res {
-		t.Errorf("Result mismatch: expected: %v, real: %v ", expect, res)
-	}
-
-	expect = 3
-	res = tableRowCount(t, dbFile, "pkgs")
-	if expect != res {
-		t.Errorf("Result mismatch: expected: %v, real: %v ", expect, res)
-	}
-
 }
 
 func TestSearch(t *testing.T) {
 
 	cases := []struct {
 		query    []string
-		arch     int
+		arch     []string
 		onlyLast bool
-		expect   []Package
+		expect   []string
 	}{
 		{
-			[]string{""}, Arch_64, true,
-			[]Package{},
+			[]string{""}, []string{"x86_64", "noarch"}, true,
+			[]string{},
 		},
 
 		{
-			[]string{"*"}, Arch_64, true,
-			[]Package{boomaga_x64_071, flacon_x64_120, saxpath_103},
+			[]string{"*"}, []string{"x86_64", "noarch"}, true,
+			[]string{boomaga_x64_071.FileName, flacon_x64_120.FileName, saxpath_103.FileName},
 		},
 
 		{
-			[]string{"boomaga"}, Arch_64, true,
-			[]Package{boomaga_x64_071},
+			[]string{"boomaga"}, []string{"x86_64", "noarch"}, true,
+			[]string{boomaga_x64_071.FileName},
 		},
 
 		{
-			[]string{"b?omaga"}, Arch_64, true,
-			[]Package{boomaga_x64_071},
+			[]string{"b?omaga"}, []string{"x86_64", "noarch"}, true,
+			[]string{boomaga_x64_071.FileName},
 		},
 
 		{
-			[]string{"boomaga"}, Arch_64, false,
-			[]Package{boomaga_x64_071, boomaga_x64_060},
+			[]string{"boomaga"}, []string{"x86_64", "noarch"}, false,
+			[]string{boomaga_x64_071.FileName, boomaga_x64_060.FileName},
 		},
 
 		{
-			[]string{"boomaga"}, Arch_32, true,
-			[]Package{boomaga_x32_071},
+			[]string{"boomaga"}, []string{"i586", "noarch"}, true,
+			[]string{boomaga_x32_071.FileName},
 		},
 
 		{
-			[]string{"boomaga"}, Arch_32, false,
-			[]Package{boomaga_x32_071, boomaga_x32_060},
+			[]string{"boomaga"}, []string{"i586", "noarch"}, false,
+			[]string{boomaga_x32_071.FileName, boomaga_x32_060.FileName},
 		},
 
 		{
-			[]string{"boomaga"}, Arch_All, false,
-			[]Package{boomaga_x32_071, boomaga_x64_071, boomaga_x32_060, boomaga_x64_060},
+			[]string{"boomaga"}, []string{"noarch", "x86_64", "i586"}, false,
+			[]string{boomaga_x32_071.FileName, boomaga_x64_071.FileName, boomaga_x32_060.FileName, boomaga_x64_060.FileName},
 		},
 	}
 
@@ -385,7 +332,6 @@ func TestSearch(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	dbFile := dir + "/test.db"
 	EtcDir = dir + "/etc"
 	VarDir = dir + "/var"
 
@@ -412,23 +358,21 @@ func TestSearch(t *testing.T) {
 		boomaga_x32_071,
 	})
 
-	cache := NewCache(dbFile)
+	cache := NewCache()
 
 	for _, c := range cases {
 		out := cache.SearchByName(c.query, c.arch, c.onlyLast)
 
-		exp := []string{}
-		for _, p := range c.expect {
-			exp = append(exp, p.Filename)
-		}
-
 		res := []string{}
 		for p := range out {
-			res = append(res, p.Filename)
+			res = append(res, p.FileName)
 		}
 
-		if !reflect.DeepEqual(res, exp) {
-			t.Errorf(TMPL_MISMATCH, c.query, exp, res)
+		sort.Strings(res)
+		sort.Strings(c.expect)
+
+		if !reflect.DeepEqual(res, c.expect) {
+			t.Errorf(TMPL_MISMATCH, c.query, c.expect, res)
 		}
 	}
 

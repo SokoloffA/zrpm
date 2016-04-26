@@ -7,7 +7,6 @@ package main
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -18,21 +17,22 @@ const (
 )
 
 type Package struct {
-	Filename    string
-	Name        string
-	Disttag     string
-	Sourcerpm   string
-	URL         string
-	License     string
-	Description string
-	Arch        string
-	Distepoch   string
-	Version     string
-	Summary     string
-	Size        int
-	Group       string
+	FileName    string // from synthesis
+	Name        string // from synthesis
+	Disttag     string // from synthesis
+	Distepoch   string // from synthesis
+	Sourcerpm   string // from info
+	URL         string // from info
+	License     string // from info
+	Description string // from info
+	Arch        string // from synthesis
+	Version     string // from synthesis
+	Summary     string // from synthesis
+	Size        int    // from synthesis
+	RPMSize     int    // from synthesis
+	Group       string // from synthesis
+	Repository  string // from synthesis
 
-	CacheID      int64
 	InstalledVer string
 }
 
@@ -53,30 +53,50 @@ func (p Package) State() int {
 }
 
 func CompareVer(ver1, ver2 string) int {
-	re := regexp.MustCompile(`[\.\-]`)
-	v1 := re.Split(ver1, -1)
-	v2 := re.Split(ver2, -1)
-
-	cnt := len(v1)
-	if cnt < len(v2) {
-		cnt = len(v2)
-	}
-
+	ver1 += "."
+	ver2 += "."
 	res := 0
-	for i := 0; res == 0 && i < cnt; i++ {
-		s1 := "0000000000"
-		s2 := "0000000000"
+	s1 := ""
+	s2 := ""
+	for res == 0 {
 
-		if i < len(v1) {
-			s1 = fmt.Sprintf("%010s", v1[i])
+		n1 := strings.IndexAny(ver1, ".-")
+		n2 := strings.IndexAny(ver2, ".-")
+
+		if n1 > -1 {
+			s1 = fmt.Sprintf("%010s", ver1[:n1])
+			ver1 = ver1[n1+1:]
+		} else {
+			s1 = "0000000000"
 		}
 
-		if i < len(v2) {
-			s2 = fmt.Sprintf("%010s", v2[i])
+		if n2 > -1 {
+			s2 = fmt.Sprintf("%010s", ver2[:n2])
+			ver2 = ver2[n2+1:]
+		} else {
+
+			s2 = "0000000000"
 		}
 
 		res = strings.Compare(s1, s2)
+		if n1 < 0 && n2 < 0 {
+			break
+		}
 	}
 
 	return res
+}
+
+type Packages []Package
+
+func (p Packages) Len() int {
+	return len(p)
+}
+
+func (p Packages) Swap(i, j int) {
+	p[i], p[j] = p[j], p[i]
+}
+
+func (p Packages) Less(i, j int) bool {
+	return p[i].Name < p[j].Name
 }
