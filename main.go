@@ -144,14 +144,13 @@ func mainSearch(c *cli.Context) {
 			state = "U"
 		}
 
-		ColorPrintf("%s%s  %-40s{NORM} %-15s %-8s %s %s\n",
+		ColorPrintf("%s%s  %-40s{NORM} %-15s %-8s %s\n",
 			color,
 			state,
 			pkg.Name,
 			pkg.Version,
 			pkg.Arch,
-			pkg.Summary,
-			pkg.Repository)
+			pkg.Summary)
 
 	}
 }
