@@ -101,6 +101,17 @@ func checkArgs(c *cli.Context) {
 	}
 }
 
+func expandQuery(query []string) []string {
+	res := []string{}
+	for _, s := range query {
+		res = append(res, s)
+		if strings.HasPrefix(s, "lib") && !strings.HasPrefix(s, "lib64") {
+			res = append(res, "lib64"+s[3:])
+		}
+	}
+	return res
+}
+
 func mainRepo(c *cli.Context) {
 	showAll := c.Bool("all")
 
@@ -130,7 +141,8 @@ func mainRepo(c *cli.Context) {
 
 func mainSearch(c *cli.Context) {
 	// Query ..........................
-	if len(c.Args()) == 0 {
+	query := c.Args()
+	if len(query) == 0 {
 		fmt.Println("You must provide at least one search term")
 		cli.ShowSubcommandHelp(c)
 		return
@@ -138,7 +150,8 @@ func mainSearch(c *cli.Context) {
 
 	// Search .........................
 	cache := NewCache()
-	out := cache.SearchByName(c.Args(), getArch(c), !c.Bool("showduplicates"))
+	query = expandQuery(query)
+	out := cache.SearchByName(query, getArch(c), !c.Bool("showduplicates"))
 
 	// Out ............................
 	for pkg := range out {
@@ -167,7 +180,8 @@ func mainSearch(c *cli.Context) {
 
 func mainShow(c *cli.Context) {
 	// Query ..........................
-	if len(c.Args()) == 0 {
+	query := c.Args()
+	if len(query) == 0 {
 		fmt.Println("You must provide at least one search term")
 		cli.ShowSubcommandHelp(c)
 		return
@@ -175,7 +189,8 @@ func mainShow(c *cli.Context) {
 
 	// Search .........................
 	cache := NewCache()
-	out := cache.SearchByName(c.Args(), getArch(c), !c.Bool("showduplicates"))
+	query = expandQuery(query)
+	out := cache.SearchByName(query, getArch(c), !c.Bool("showduplicates"))
 
 	// Out ............................
 	for pkg := range out {
