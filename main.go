@@ -61,14 +61,24 @@ func machineArch() string {
 }
 
 func getArch(c *cli.Context) []string {
-	if c.String("arch") != "" {
-		return strings.Split(c.String("arch"), ",")
+	s := strings.ToLower(c.String("arch"))
+
+	if s == "" {
+		return []string{
+			"noarch",
+			machineArch(),
+		}
 	}
 
-	return []string{
-		"noarch",
-		machineArch(),
+	if strings.Contains(s, "all") {
+		return []string{
+			"i586",
+			"x86_64",
+			"noarch",
+		}
 	}
+
+	return strings.Split(s, ",")
 }
 
 func execute(args ...string) {
