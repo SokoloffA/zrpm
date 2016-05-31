@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	version = "0.2.0"
-	author  = "Alexander Sokolov <sokoloff.A@gmail.com>"
+	version = "0.3.0"
+	author  = "Alexander Sokolov <sokoloff.a@gmail.com>"
 )
 
 var (
