@@ -22,26 +22,35 @@ const (
 )
 
 var (
-	ColorNorm   = "\x1b[0m"
-	ColorBold   = "\x1b[1m"
-	ColorGreen  = "\x1b[32m"
-	ColorYellow = "\x1b[33m"
+	colorNorm   = "\x1b[0m"
+	colorBold   = "\x1b[1m"
+	colorGreen  = "\x1b[32m"
+	colorYellow = "\x1b[33m"
 )
 
-func ResetColors() {
-	ColorNorm = ""
-	ColorBold = ""
-	ColorGreen = ""
-	ColorYellow = ""
+func resetColors() {
+	colorNorm = ""
+	colorBold = ""
+	colorGreen = ""
+	colorYellow = ""
 }
 
-func ColorPrintf(format string, a ...interface{}) {
-	format = strings.Replace(format, "{NORM}", ColorNorm, -1)
-	format = strings.Replace(format, "{BOLD}", ColorBold, -1)
-	format = strings.Replace(format, "{GREEN}", ColorGreen, -1)
-	format = strings.Replace(format, "{YELLOW}", ColorYellow, -1)
+func colorPrintf(format string, a ...interface{}) {
+	format = strings.Replace(format, "{NORM}", colorNorm, -1)
+	format = strings.Replace(format, "{BOLD}", colorBold, -1)
+	format = strings.Replace(format, "{GREEN}", colorGreen, -1)
+	format = strings.Replace(format, "{YELLOW}", colorYellow, -1)
 
 	fmt.Printf(format, a...)
+}
+
+func colorSprintf(format string, a ...interface{}) string {
+	format = strings.Replace(format, "{NORM}", colorNorm, -1)
+	format = strings.Replace(format, "{BOLD}", colorBold, -1)
+	format = strings.Replace(format, "{GREEN}", colorGreen, -1)
+	format = strings.Replace(format, "{YELLOW}", colorYellow, -1)
+
+	return fmt.Sprintf(format, a...)
 }
 
 func machineArch() string {
@@ -125,7 +134,7 @@ func mainRepo(c *cli.Context) {
 			continue
 		}
 
-		ColorPrintf("{BOLD}%s{NORM}\n", rep.Name)
+		colorPrintf("{BOLD}%s{NORM}\n", rep.Name)
 		fmt.Printf("    last update: ")
 
 		if rep.Ignore {
@@ -137,6 +146,35 @@ func mainRepo(c *cli.Context) {
 		fmt.Printf("    URL: %v\n", rep.URL)
 		fmt.Println("")
 	}
+}
+
+func colorizeResultStringOne(q, str string) string {
+	if q == "" {
+		return str
+	}
+	q = strings.ToLower(q)
+
+	res := ""
+	lStr := strings.ToLower(str)
+	for {
+		n := strings.Index(lStr, q)
+		if n < 0 {
+			return res + str
+		}
+
+		res += str[:n] + colorBold + str[n:n+len(q)] + colorNorm
+		str = str[n+len(q):]
+		lStr = lStr[n+len(q):]
+	}
+}
+
+func colorizeResultString(query []string, str string) string {
+	res := str
+
+	for _, q := range query {
+		res = colorizeResultStringOne(q, res)
+	}
+	return res
 }
 
 func mainSearch(c *cli.Context) {
@@ -159,22 +197,21 @@ func mainSearch(c *cli.Context) {
 		state := " "
 		switch pkg.State() {
 		case PACKAGE_INSATALLED:
-			color = ColorGreen
+			color = colorGreen
 			state = "I"
 
 		case PACKAGE_UPDATE:
-			color = ColorYellow
+			color = colorYellow
 			state = "U"
 		}
 
-		ColorPrintf("%s%s  %-40s{NORM} %-15s %-8s %s\n",
-			color,
-			state,
-			pkg.Name,
-			pkg.Version,
-			pkg.Arch,
-			pkg.Summary)
-
+		line := ""
+		line += color + state + colorNorm
+		line += colorizeResultString(query, fmt.Sprintf("  %-40s ", pkg.Name))
+		line += color + fmt.Sprintf("%-20s", pkg.Version) + colorNorm
+		line += fmt.Sprintf("%-8s ", pkg.Arch)
+		line += colorizeResultString(query, pkg.Summary)
+		fmt.Println(line)
 	}
 }
 
@@ -194,27 +231,27 @@ func mainShow(c *cli.Context) {
 
 	// Out ............................
 	for pkg := range out {
-		ColorPrintf("Name        : {BOLD}%s{NORM}\n", pkg.Name)
-		ColorPrintf("Summary     : %s\n", pkg.Summary)
-		ColorPrintf("Version     : %-10s %-10s\n", pkg.Version, pkg.Arch)
+		colorPrintf("Name        : {BOLD}%s{NORM}\n", pkg.Name)
+		colorPrintf("Summary     : %s\n", pkg.Summary)
+		colorPrintf("Version     : %-10s %-10s\n", pkg.Version, pkg.Arch)
 		switch pkg.State() {
 		case PACKAGE_NOTINSATALLED:
-			ColorPrintf("Not installed\n")
+			colorPrintf("Not installed\n")
 
 		case PACKAGE_INSATALLED:
-			ColorPrintf("Installed   : {GREEN}%s{NORM}\n", pkg.InstalledVer)
+			colorPrintf("Installed   : {GREEN}%s{NORM}\n", pkg.InstalledVer)
 
 		case PACKAGE_UPDATE:
-			ColorPrintf("Installed   : {YELLOW}%s{NORM}\n", pkg.InstalledVer)
+			colorPrintf("Installed   : {YELLOW}%s{NORM}\n", pkg.InstalledVer)
 		}
 
-		ColorPrintf("Group       : %s\n", pkg.Group)
-		ColorPrintf("Size        : RPM: %v     Files: %v\n", pkg.RPMSize, pkg.Size)
-		ColorPrintf("Source RPM  : %s\n", pkg.Sourcerpm)
-		ColorPrintf("URL         : %s\n", pkg.URL)
-		ColorPrintf("Repository  : %s\n", pkg.Repository)
+		colorPrintf("Group       : %s\n", pkg.Group)
+		colorPrintf("Size        : RPM: %v     Files: %v\n", pkg.RPMSize, pkg.Size)
+		colorPrintf("Source RPM  : %s\n", pkg.Sourcerpm)
+		colorPrintf("URL         : %s\n", pkg.URL)
+		colorPrintf("Repository  : %s\n", pkg.Repository)
 		s := strings.TrimLeft(pkg.Description, "\n")
-		ColorPrintf(s)
+		colorPrintf(s)
 		fmt.Println("")
 	}
 }
@@ -395,7 +432,7 @@ func main() {
 
 	app.Before = func(c *cli.Context) error {
 		if c.Bool("nocolor") || !terminal.IsTerminal(int(os.Stdout.Fd())) {
-			ResetColors()
+			resetColors()
 		}
 		return nil
 	}
