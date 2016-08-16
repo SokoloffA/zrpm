@@ -201,7 +201,7 @@ func compareName(names []string, pkg Package) bool {
 
 func compareArch(arch []string, pkg Package) bool {
 	for _, a := range arch {
-		if strings.ToLower(pkg.Arch) == strings.ToLower(a) {
+		if strings.EqualFold(pkg.Arch, a) {
 			return true
 		}
 	}
